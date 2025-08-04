@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"log"
 	"math"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
+	"time"
 )
 
 type Stock struct {
@@ -100,6 +104,82 @@ func Calculate(gapPercent, openingPrice float64) Position {
 type Selection struct {
 	Ticker string
 	Position
+	Articles []Article
+}
+
+const (
+	url          = "https://seeking-alpha.p.rapidapi.com/news/v2/list-by-symbol?id=AAPL&size=5&id="
+	apiKeyHeader = "x-rapidapi-key"
+	apiKey       = "bfe66c058dmsha2f18e51b86c7d1p1a0fbejsnd6258bc8b219"
+)
+
+type attributes struct {
+	PublishOn time.Time `json:"publishOn"`
+	Title     string    `json:"title"`
+}
+
+type seekingAlphaNews struct {
+	Attributes attributes `json:"attributes"`
+}
+
+type SeekingAlphaResponse struct {
+	Data []seekingAlphaNews `json:"data"`
+}
+
+type Article struct {
+	PublishOn time.Time
+	Headline  string
+}
+
+func FetchNews(ticker string) ([]Article, error) {
+	req, err := http.NewRequest(http.MethodGet, url+ticker, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add(apiKeyHeader, apiKey)
+
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("error fetching news for %s: %s", ticker, resp.Status)
+	}
+
+	res := &SeekingAlphaResponse{}
+	json.NewDecoder(resp.Body).Decode(res)
+
+	var articles []Article
+
+	for _, item := range res.Data {
+		art := Article{
+			PublishOn: item.Attributes.PublishOn,
+			Headline:  item.Attributes.Title,
+		}
+		articles = append(articles, art)
+	}
+
+	return articles, nil
+}
+
+func Deliver(filePath string, selections []Selection) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("error creating file: %w", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(selections)
+	if err != nil {
+		return fmt.Errorf("error encoding selections to JSON: %w", err)
+	}
+
+	return nil
 }
 
 func main() {
@@ -111,7 +191,7 @@ func main() {
 	}
 
 	slices.DeleteFunc(stocks, func(s Stock) bool {
-		return math.Abs(s.Gap) < 0.1
+		return math.Abs(s.Gap) < .1
 	})
 
 	var selections []Selection
@@ -119,11 +199,29 @@ func main() {
 	for _, stock := range stocks {
 		position := Calculate(stock.Gap, stock.OpeningPrice)
 
+		articles, err := FetchNews(stock.Ticker)
+		if err != nil {
+			fmt.Printf("Error fetching news for %s: %v\n", stock.Ticker, err)
+			continue
+		} else {
+			log.Printf("Found %d articles for %s\n", len(articles), stock.Ticker)
+		}
 		sel := Selection{
 			Ticker:   stock.Ticker,
 			Position: position,
+			Articles: articles,
 		}
 
 		selections = append(selections, sel)
 	}
+
+	outputPath := "./opg.json"
+
+	err = Deliver(outputPath, selections)
+	if err != nil {
+		log.Printf("Error writing output %s: %v\n", outputPath, err)
+		return
+	}
+
+	log.Printf("Wrote %d selections to %s\n", len(selections), outputPath)
 }
