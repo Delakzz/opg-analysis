@@ -97,6 +97,11 @@ func Calculate(gapPercent, openingPrice float64) Position {
 	}
 }
 
+type Selection struct {
+	Ticker string
+	Position
+}
+
 func main() {
 
 	stocks, err := Load("./opg.csv")
@@ -109,4 +114,16 @@ func main() {
 		return math.Abs(s.Gap) < 0.1
 	})
 
+	var selections []Selection
+
+	for _, stock := range stocks {
+		position := Calculate(stock.Gap, stock.OpeningPrice)
+
+		sel := Selection{
+			Ticker:   stock.Ticker,
+			Position: position,
+		}
+
+		selections = append(selections, sel)
+	}
 }
