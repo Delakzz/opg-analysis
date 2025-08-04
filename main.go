@@ -61,18 +61,18 @@ func Load(path string) ([]Stock, error) {
 }
 
 var (
-	accountBalance = 100000.0 // how much money in trading account
-	lossTolerance = .02 // what percentage of that balance I can tolerate losing
+	accountBalance  = 100000.0                       // how much money in trading account
+	lossTolerance   = .02                            // what percentage of that balance I can tolerate losing
 	maxLossPerTrade = accountBalance * lossTolerance // maximum maount i can tolerate losing
-	profitPercent = .8 // percentage of the gap I want to take as profit
+	profitPercent   = .8                             // percentage of the gap I want to take as profit
 )
 
 type Position struct {
-	EntryPrice float64 // the price at which to buy or sell
-	Shares int // how many shares to buy or sell
+	EntryPrice      float64 // the price at which to buy or sell
+	Shares          int     // how many shares to buy or sell
 	TakeProfitPrice float64 // the price at which to exit and take my profit
-	StopLossPrice float64 // the price at which to stop my loss if the stock doesn't go our way
-	Profit float64 // expected final profit
+	StopLossPrice   float64 // the price at which to stop my loss if the stock doesn't go our way
+	Profit          float64 // expected final profit
 }
 
 func Calculate(gapPercent, openingPrice float64) Position {
@@ -89,11 +89,12 @@ func Calculate(gapPercent, openingPrice float64) Position {
 	profit = math.Round(profit*100) / 100 // round to 2 decimal places
 
 	return Position{
-		EntryPrice:      math.Round(openingPrice*100) / 100, 
+		EntryPrice:      math.Round(openingPrice*100) / 100,
 		Shares:          shares,
 		TakeProfitPrice: math.Round(takeProfit*100) / 100,
-		StopLossPrice:   math.Round(stopLoss*100) / 100, 
-		Profit:          math.Round(profit*100) / 100, 
+		StopLossPrice:   math.Round(stopLoss*100) / 100,
+		Profit:          math.Round(profit*100) / 100,
+	}
 }
 
 func main() {
