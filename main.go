@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -195,25 +196,31 @@ func main() {
 	})
 
 	var selections []Selection
-
+	var wg sync.WaitGroup
 	for _, stock := range stocks {
-		position := Calculate(stock.Gap, stock.OpeningPrice)
+		wg.Add(1)
+		go func(s Stock) {
+			defer wg.Done()
+			position := Calculate(stock.Gap, stock.OpeningPrice)
 
-		articles, err := FetchNews(stock.Ticker)
-		if err != nil {
-			fmt.Printf("Error fetching news for %s: %v\n", stock.Ticker, err)
-			continue
-		} else {
-			log.Printf("Found %d articles for %s\n", len(articles), stock.Ticker)
-		}
-		sel := Selection{
-			Ticker:   stock.Ticker,
-			Position: position,
-			Articles: articles,
-		}
+			articles, err := FetchNews(stock.Ticker)
+			if err != nil {
+				fmt.Printf("Error loading news for %s: %v\n", stock.Ticker, err)
+				return
+			} else {
+				log.Printf("Found %d articles about %s\n", len(articles), stock.Ticker)
+			}
+			sel := Selection{
+				Ticker:   stock.Ticker,
+				Position: position,
+				Articles: articles,
+			}
 
-		selections = append(selections, sel)
+			selections = append(selections, sel)
+		}(stock)
 	}
+
+	wg.Wait()
 
 	outputPath := "./opg.json"
 
