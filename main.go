@@ -190,7 +190,7 @@ func main() {
 		return
 	}
 
-	slices.DeleteFunc(stocks, func(s Stock) bool {
+	stocks = slices.DeleteFunc(stocks, func(s Stock) bool {
 		return math.Abs(s.Gap) < .1
 	})
 
