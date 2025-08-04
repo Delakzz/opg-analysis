@@ -10,7 +10,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -195,12 +194,10 @@ func main() {
 		return math.Abs(s.Gap) < .1
 	})
 
-	var selections []Selection
-	var wg sync.WaitGroup
+	selectionsChannel := make(chan Selection, len(stocks))
+
 	for _, stock := range stocks {
-		wg.Add(1)
-		go func(s Stock) {
-			defer wg.Done()
+		go func(s Stock, selected chan<- Selection) {
 			position := Calculate(stock.Gap, stock.OpeningPrice)
 
 			articles, err := FetchNews(stock.Ticker)
@@ -216,11 +213,18 @@ func main() {
 				Articles: articles,
 			}
 
-			selections = append(selections, sel)
-		}(stock)
+			selected <- sel
+		}(stock, selectionsChannel)
 	}
 
-	wg.Wait()
+	var selections []Selection
+
+	for sel := range selectionsChannel {
+		selections = append(selections, sel)
+		if len(selections) == len(stocks) {
+			close(selectionsChannel)
+		}
+	}
 
 	outputPath := "./opg.json"
 
