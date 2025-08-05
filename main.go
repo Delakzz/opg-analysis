@@ -3,236 +3,58 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"flag"
 	"fmt"
-	"log"
-	"math"
-	"net/http"
 	"os"
-	"slices"
-	"strconv"
-	"time"
+
+	"github.com/Delakzz/opg-analysis/cmd"
+	"github.com/Delakzz/opg-analysis/internal/news"
+	"github.com/Delakzz/opg-analysis/internal/pos"
+	"github.com/Delakzz/opg-analysis/internal/raw"
+	"github.com/Delakzz/opg-analysis/internal/trade"
+	"github.com/Delakzz/opg-analysis/pkg/process"
+	"github.com/Delakzz/opg-analysis/pkg/salpha"
 )
-
-type Stock struct {
-	Ticker       string
-	Gap          float64
-	OpeningPrice float64
-}
-
-func Load(path string) ([]Stock, error) {
-	f, err := os.Open(path)
-
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	rows, err := r.ReadAll()
-
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-
-	rows = slices.Delete(rows, 0, 1)
-
-	var stocks []Stock
-
-	for _, row := range rows {
-		ticker := row[0]
-		gap, err := strconv.ParseFloat(row[1], 64)
-
-		if err != nil {
-			continue
-		}
-
-		openingPrice, err := strconv.ParseFloat(row[2], 64)
-		if err != nil {
-			continue
-		}
-
-		stocks = append(stocks, Stock{
-			Ticker:       ticker,
-			Gap:          gap,
-			OpeningPrice: openingPrice,
-		})
-	}
-
-	return stocks, nil
-}
-
-var (
-	accountBalance  = 100000.0                       // how much money in trading account
-	lossTolerance   = .02                            // what percentage of that balance I can tolerate losing
-	maxLossPerTrade = accountBalance * lossTolerance // maximum maount i can tolerate losing
-	profitPercent   = .8                             // percentage of the gap I want to take as profit
-)
-
-type Position struct {
-	EntryPrice      float64 // the price at which to buy or sell
-	Shares          int     // how many shares to buy or sell
-	TakeProfitPrice float64 // the price at which to exit and take my profit
-	StopLossPrice   float64 // the price at which to stop my loss if the stock doesn't go our way
-	Profit          float64 // expected final profit
-}
-
-func Calculate(gapPercent, openingPrice float64) Position {
-	closingPrice := openingPrice / (1 + gapPercent)
-	gapValue := closingPrice - openingPrice
-	profitFromGap := profitPercent * gapValue
-
-	stopLoss := openingPrice - profitFromGap
-	takeProfit := openingPrice + profitFromGap
-
-	shares := int(maxLossPerTrade / math.Abs(stopLoss-openingPrice))
-
-	profit := math.Abs(openingPrice-takeProfit) * float64(shares)
-	profit = math.Round(profit*100) / 100 // round to 2 decimal places
-
-	return Position{
-		EntryPrice:      math.Round(openingPrice*100) / 100,
-		Shares:          shares,
-		TakeProfitPrice: math.Round(takeProfit*100) / 100,
-		StopLossPrice:   math.Round(stopLoss*100) / 100,
-		Profit:          math.Round(profit*100) / 100,
-	}
-}
-
-type Selection struct {
-	Ticker string
-	Position
-	Articles []Article
-}
-
-const (
-	url          = "https://seeking-alpha.p.rapidapi.com/news/v2/list-by-symbol?id=AAPL&size=5&id="
-	apiKeyHeader = "x-rapidapi-key"
-	apiKey       = "bfe66c058dmsha2f18e51b86c7d1p1a0fbejsnd6258bc8b219"
-)
-
-type attributes struct {
-	PublishOn time.Time `json:"publishOn"`
-	Title     string    `json:"title"`
-}
-
-type seekingAlphaNews struct {
-	Attributes attributes `json:"attributes"`
-}
-
-type SeekingAlphaResponse struct {
-	Data []seekingAlphaNews `json:"data"`
-}
-
-type Article struct {
-	PublishOn time.Time
-	Headline  string
-}
-
-func FetchNews(ticker string) ([]Article, error) {
-	req, err := http.NewRequest(http.MethodGet, url+ticker, nil)
-
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add(apiKeyHeader, apiKey)
-
-	client := http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("error fetching news for %s: %s", ticker, resp.Status)
-	}
-
-	res := &SeekingAlphaResponse{}
-	json.NewDecoder(resp.Body).Decode(res)
-
-	var articles []Article
-
-	for _, item := range res.Data {
-		art := Article{
-			PublishOn: item.Attributes.PublishOn,
-			Headline:  item.Attributes.Title,
-		}
-		articles = append(articles, art)
-	}
-
-	return articles, nil
-}
-
-func Deliver(filePath string, selections []Selection) error {
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("error creating file: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(selections)
-	if err != nil {
-		return fmt.Errorf("error encoding selections to JSON: %w", err)
-	}
-
-	return nil
-}
 
 func main() {
 
-	stocks, err := Load("./opg.csv")
+	var seekingAlphaURL = os.Getenv("SEEKING_ALPHA_URL")
+	var seekingAlphaAPIKey = os.Getenv("SEEKING_ALPHA_API_KEY")
+
+	if seekingAlphaURL == "" {
+		fmt.Println("Missing SEEKING_ALPHA_URL environment variable")
+		os.Exit(1)
+	}
+
+	if seekingAlphaAPIKey == "" {
+		fmt.Println("Missing SEEKING_ALPHA_API_KEY environment variable")
+		os.Exit(1)
+	}
+
+	inputPath := flag.String("i", "", "path to input file (required)")
+	accountBalance := flag.Float64("b", 0.0, "Account balance (required)")
+	outputPath := flag.String("o", "./opg.json", "Path to output file.")
+	lossTolerance := flag.Float64("l", 0.02, "Loss tolerance percentage")
+	profitPercent := flag.Float64("p", 0.8, "Percentage of the gap to take as profit")
+	minGap := flag.Float64("m", 0.1, "Minimum gap value to consider")
+
+	flag.Parse()
+
+	// Check if required flags are provided
+	if *inputPath == "" || *accountBalance == 0.0 {
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	var ldr raw.Loader = csv.NewLoader(*inputPath)
+	var f raw.Filterer = process.NewFilterer(*minGap)
+	var c pos.Calculator = process.NewCalculator(*accountBalance, *lossTolerance, *profitPercent)
+	var fet news.Fetcher = salpha.NewClient(seekingAlphaURL, seekingAlphaAPIKey)
+	var del trade.Deliverer = json.NewDeliverer(*outputPath)
+
+	err := cmd.Run(ldr, f, c, fet, del)
 	if err != nil {
-		fmt.Print(err)
-		return
+		fmt.Println(err)
+		os.Exit(1)
 	}
-
-	stocks = slices.DeleteFunc(stocks, func(s Stock) bool {
-		return math.Abs(s.Gap) < .1
-	})
-
-	selectionsChannel := make(chan Selection, len(stocks))
-
-	for _, stock := range stocks {
-		go func(s Stock, selected chan<- Selection) {
-			position := Calculate(stock.Gap, stock.OpeningPrice)
-
-			articles, err := FetchNews(stock.Ticker)
-			if err != nil {
-				fmt.Printf("Error loading news for %s: %v\n", stock.Ticker, err)
-				return
-			} else {
-				log.Printf("Found %d articles about %s\n", len(articles), stock.Ticker)
-			}
-			sel := Selection{
-				Ticker:   stock.Ticker,
-				Position: position,
-				Articles: articles,
-			}
-
-			selected <- sel
-		}(stock, selectionsChannel)
-	}
-
-	var selections []Selection
-
-	for sel := range selectionsChannel {
-		selections = append(selections, sel)
-		if len(selections) == len(stocks) {
-			close(selectionsChannel)
-		}
-	}
-
-	outputPath := "./opg.json"
-
-	err = Deliver(outputPath, selections)
-	if err != nil {
-		log.Printf("Error writing output %s: %v\n", outputPath, err)
-		return
-	}
-
-	log.Printf("Wrote %d selections to %s\n", len(selections), outputPath)
 }
